@@ -1,0 +1,18 @@
+{
+  "name": "@dmnchzl/act",
+  "version": "0.0.1",
+  "description": "Act: HTML Framework Project",
+  "author": "Damien Chazoule <dmnchzl@pm.me>",
+  "repository": "https://github.com/dmnchzl/act.git",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.3",
+    "vite": "~7.0.1"
+  },
+  "license": "WTFPL"
+}
