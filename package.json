@@ -1,7 +1,7 @@
 {
   "name": "@dmnchzl/act",
-  "version": "0.0.1",
-  "description": "Act: HTML Framework Project",
+  "version": "0.1.0",
+  "description": "Another reactive frontend framework, but with fine-grained architecture.",
   "author": "Damien Chazoule <dmnchzl@pm.me>",
   "repository": "https://github.com/dmnchzl/act.git",
   "type": "module",
@@ -14,5 +14,5 @@
     "typescript": "~5.8.3",
     "vite": "~7.0.1"
   },
-  "license": "WTFPL"
+  "license": "MIT"
 }

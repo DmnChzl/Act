@@ -1,6 +1,5 @@
-import './index.css';
 import App from './App';
+import './index.css';
 
-new App('#root', {
-  defaultValue: 0
-});
+const root = document.getElementById('root') as HTMLElement;
+root.appendChild(App());

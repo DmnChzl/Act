@@ -1,14 +1,146 @@
-type ComponentState = Record<string, any>;
+/**
+ * @file Act is another reactive frontend framework, but with fine-grained architecture.
+ * Inspired by Lit and Solid, this framework uses a Signals system
+ * to update the DOM effectively and straightforwardly.
+ */
+
+/* --- Reactive System --- */
+export type Signal<T> = () => T;
+
+type Subscriber = () => void;
+type Cleanup = () => void;
+
+interface EffectContext {
+  subscriber: Subscriber;
+  cleanup: Cleanup | null;
+}
+
+/**
+ * Creates a reactive signal with getter and setter
+ *
+ * @template T The type of the stored value
+ * @param {T} initialValue The initial value of the signal
+ * @returns {[(Signal<T>, (val: T) => void]} Getter and setter as tuple
+ *
+ * @example
+ * ```ts
+ * const [count, setCount] = createSignal(0);
+ * console.log(count()); // 0
+ * setCount(42);
+ * console.log(count()); // 42
+ * ```
+ */
+export function createSignal<T>(initialValue: T): [Signal<T>, (val: T) => void] {
+  let value = initialValue;
+  const subscribers = new Set<Subscriber>();
+
+  const getter = () => {
+    const activeEffect = getActiveEffect();
+    if (activeEffect) subscribers.add(activeEffect);
+    return value;
+  };
+
+  const setter = (nextValue: T) => {
+    if (value !== nextValue) {
+      value = nextValue;
+      subscribers.forEach(fn => fn());
+    }
+  };
+
+  return [getter, setter];
+}
+
+/**
+ * Creates a computed value that automatically updates
+ * when its dependencies change
+ *
+ * @template T The type of the computed value
+ * @param {() => T} fn Function to compute the value
+ * @returns {Signal<T>} Getter for the computed value
+ *
+ * @example
+ * ```ts
+ * const [count, setCount] = createSignal(21);
+ * const doubleCount = createComputed(() => count() * 2);
+ * console.log(count()); // 21
+ * console.log(doubleCount()); // 42
+ * ```
+ */
+export function createComputed<T>(fn: () => T): Signal<T> {
+  let cachedValue: T;
+  const [get, set] = createSignal<T>(fn());
+
+  createEffect(() => {
+    cachedValue = fn();
+    set(cachedValue);
+  });
+
+  return get;
+}
+
+const effectStack: EffectContext[] = [];
+
+/**
+ * Creates a reactive effect that automatically re-executes
+ * when its dependencies change
+ *
+ * @param {Subscriber} fn Function to execute, can return a cleanup function
+ *
+ * @example
+ * ```ts
+ * const [count, setCount] = createSignal(0);
+ *
+ * createEffect(() => {
+ *   const value = count();
+ *   console.log('Count is', value);
+ *
+ *   return () => {
+ *     console.log('Count was', value);
+ *   };
+ * });
+ * ```
+ */
+export function createEffect(fn: Subscriber) {
+  const ctx: EffectContext = {
+    subscriber: fn,
+    cleanup: null
+  };
+
+  const wrapped = () => {
+    if (ctx.cleanup) {
+      ctx.cleanup();
+      ctx.cleanup = null;
+    }
+
+    effectStack.push(ctx);
+    const cleanup = fn();
+
+    if (typeof cleanup === 'function') {
+      ctx.cleanup = cleanup;
+    }
+
+    effectStack.pop();
+  };
+
+  ctx.subscriber = wrapped;
+  wrapped();
+}
+
+// Get the active reactive effect from the top of the effect stack
+function getActiveEffect(): Subscriber | null {
+  if (effectStack.length === 0) return null;
+  return effectStack[effectStack.length - 1].subscriber;
+};
+
+// --- Template System ---
 type BindingType = 'attribute' | 'event' | 'property' | 'text';
-type EventHandler = (event: Event) => void;
 
 interface Binding {
   index: number;
-  eventHandler?: EventHandler;
   key: string;
-  node: Node;
   type: BindingType;
-  value: any;
+  node: Node;
+  eventHandler?: EventListener;
 }
 
 const DOM_EVENTS = new Set([
@@ -50,236 +182,238 @@ const DOM_PROPS = new Set([
   'value'
 ]);
 
-export class Component<T extends Record<string, any> = {}> {
-  private _container: Element | null = null;
-  private _state: ComponentState;
-  private _props: T;
-  private _mounted = false;
+// Determines if an attribute is a DOM event
+const isEventAttribute = (attr: string): boolean => DOM_EVENTS.has(attr);
+// Determines if an attribute is a DOM property
+const isPropAttribute = (attr: string): boolean => DOM_PROPS.has(attr);
 
-  constructor(selector: string, initialState: ComponentState = {}, props: T) {
-    this._state = initialState;
-    this._props = props;
-    this.mount(selector);
-  }
-
-  get state(): ComponentState {
-    return this._state;
-  }
-
-  get props(): T {
-    return this._props;
-  }
-
-  render(): Node {
-    throw new Error('render() Method Must Be Implemented');
-  }
-
-  /* Component LifeCycle */
-  onMounted() {}
-  onUpdated(_prevState: ComponentState, _nextState: ComponentState) {}
-  onUnmounted() {}
-
-  setState(newState: Partial<Record<string, any>>) {
-    const prevState = this._state;
-    this._state = { ...prevState, ...newState };
-
-    if (this._mounted) {
-      this.update();
-      this.onUpdated(prevState, this._state);
-    }
-  }
-
-  private mount(selector: string) {
-    const element = document.querySelector(selector);
-    if (!element) throw new Error('Element Not Found');
-
-    const rendered = this.render();
-    element.appendChild(rendered);
-
-    this._container = element;
-    this._mounted = true;
-    this.onMounted();
-  }
-
-  private update() {
-    if (!this._container) {
-      console.warn('No "Container" Found');
-      return;
-    }
-
-    this._container.innerHTML = '';
-    const rendered = this.render();
-    this._container.appendChild(rendered);
-  }
-
-  // @ts-ignore
-  private unmount() {
-    if (!this._container) {
-      console.warn('No "Container" Found');
-      return;
-    }
-
-    this.onUnmounted();
-    this._container.innerHTML = '';
-    this._mounted = false;
-  }
+/**
+ * Determines the binding type based on the attribute name
+ *
+ * @param {string} attr Attribute name
+ * @returns {BindingType} Corresponding binding type
+ */
+function getBindingType(attr: string): BindingType {
+  if (isEventAttribute(attr)) return 'event';
+  if (isPropAttribute(attr)) return 'property';
+  return 'attribute';
 }
 
-const _getBindingType = (attrName: string): BindingType => {
-  if (DOM_EVENTS.has(attrName)) return 'event';
-  if (DOM_PROPS.has(attrName)) return 'property';
-  return 'attribute';
-};
-
-const _isEventType = (bindingType: BindingType) => bindingType === 'event';
-
-const createBindings = (rootNode: Node) => {
+/**
+ * Traverses a DOM tree to find all bindings
+ * Bindings are identified by HTML comments of the form <!--binding-x-->
+ *
+ * @param {Node} root Root node to traverse
+ * @returns {Binding[]} List of found bindings, sorted by index
+ */
+function createBindings(root: Node): Binding[] {
   let bindings: Binding[] = [];
 
-  const walkNodes = (node: Node) => {
+  const walk = (node: Node) => {
     if (node.nodeType === Node.COMMENT_NODE && node.nodeValue?.startsWith('binding-')) {
-      const matches = node.nodeValue.match(/^binding-(\d+)$/);
-      if (matches) {
-        const [_, indexStr] = matches;
-        bindings = [
-          ...bindings,
-          {
-            index: Number(indexStr),
-            key: '',
-            node,
-            type: 'text',
-            value: undefined
-          }
-        ];
-      }
+      const [_, indexStr] = node.nodeValue.split('-');
+      bindings = [
+        ...bindings,
+        {
+          index: Number(indexStr),
+          key: '',
+          node,
+          type: 'text'
+        }
+      ];
     }
 
     if (node.nodeType === Node.ELEMENT_NODE) {
       const attributes = [...(node as Element).attributes];
-      attributes.forEach(attr => {
-        if (attr.value.startsWith('<!--binding-') && attr.value.endsWith('-->')) {
-          const matches = attr.value.match(/<!--binding-(\d+)-->/);
-          if (matches) {
-            const [_, indexStr] = matches;
-            const bindingType = _getBindingType(attr.name);
-            const bindingKey = _isEventType(bindingType) ? attr.name.slice(2) : attr.name;
+      for (const attr of attributes) {
+        const matches = attr.value.match(/<!--binding-(\d+)-->/);
+        if (matches) {
+          const [_, indexStr] = matches;
+          const type = getBindingType(attr.name);
+          const key = type === 'event' ? attr.name.slice(2) : attr.name;
 
-            bindings = [
-              ...bindings,
-              {
-                index: Number(indexStr),
-                key: bindingKey,
-                node,
-                type: bindingType,
-                value: undefined
-              }
-            ];
-          }
+          bindings = [
+            ...bindings,
+            {
+              index: Number(indexStr),
+              key,
+              node,
+              type
+            }
+          ];
         }
-      });
+      }
     }
 
-    for (let child of node.childNodes) {
-      walkNodes(child);
+    for (const child of node.childNodes) {
+      walk(child);
     }
   };
 
-  walkNodes(rootNode);
+  walk(root);
+  return bindings.sort((a, b) => a.index - b.index);
+}
 
-  bindings.sort((a, b) => a.index - b.index);
-  return bindings;
-};
+// Resolves a value that may be a function
+function resolveValue(raw: any) {
+  try {
+    if (typeof raw === 'function') {
+      const result = raw();
+      if (result instanceof Node || typeof result === 'string' || typeof result === 'number') {
+        return result;
+      }
+      return result;
+    }
+    return raw;
+  } catch {
+    return raw;
+  }
+}
 
-const _applyAttributeBinding = (binding: Binding, value: any) => {
+/**
+ * Applies all bindings to their respective DOM nodes
+ *
+ * @param {Binding[]} bindings List of bindings to apply
+ * @param {Array} values Interpolated values from the template
+ */
+function applyAllBindings(bindings: Binding[], values: any[]) {
+  bindings.forEach(binding => {
+    const raw = values[binding.index];
+
+    if (binding.type === 'text') {
+      if (typeof raw === 'function') {
+        createEffect(() => applyBinding(binding, resolveValue(raw)));
+      } else {
+        applyBinding(binding, resolveValue(raw));
+      }
+    } else {
+      applyBinding(binding, raw);
+    }
+  });
+}
+
+/**
+ * Applies an attribute binding
+ *
+ * @param {Binding} binding Binding configuration
+ * @param {*} value Value to apply
+ */
+function applyAttributeBinding(binding: Binding, value: any) {
   const element = binding.node as Element;
   element.setAttribute(binding.key, String(value));
-  binding.value = value;
-};
+}
 
-const _applyEventBinding = (binding: Binding, value: any) => {
+/**
+ * Applies an event binding
+ *
+ * @param {Binding} binding Binding configuration
+ * @param {*} value Event handler to apply
+ */
+function applyEventBinding(binding: Binding, value: any) {
   const element = binding.node as Element;
+  element.removeAttribute(`on${binding.key}`);
 
   if (binding.eventHandler) {
     element.removeEventListener(binding.key, binding.eventHandler);
   }
 
   if (typeof value === 'function') {
-    const listener = (event: Event) => {
-      value(event);
-    };
-
-    element.addEventListener(binding.key, listener);
-    binding.eventHandler = listener;
+    const handler = (event: Event) => value(event);
+    element.addEventListener(binding.key, handler);
+    binding.eventHandler = handler;
   }
+}
 
-  binding.value = value;
-};
-
-const _isBooleanProperty = (key: string) => {
-  return ['checked', 'disabled', 'hidden', 'readOnly', 'required', 'selected'].includes(key);
-};
-
-const _applyPropertyBinding = (binding: Binding, value: any) => {
+/**
+ * Applies a property binding
+ *
+ * @param {Binding} binding Binding configuration
+ * @param {*} value Value to apply to the property
+ */
+function applyPropertyBinding(binding: Binding, value: any) {
   const element = binding.node as Element;
-  let propertyValue = value;
-
-  if (_isBooleanProperty(binding.key)) {
-    propertyValue = Boolean(value);
-  }
-
   // @ts-ignore
-  element[binding.key] = propertyValue;
-  binding.value = value;
-};
+  element[binding.key] = value;
+}
 
-const _applyTextBinding = (binding: Binding, value: any) => {
-  const textNode = document.createTextNode(String(value));
+/**
+ * Applies a text binding
+ *
+ * @param {Binding} binding Binding configuration
+ * @param {*} value Content to insert
+ */
+function applyTextBinding(binding: Binding, value: any) {
+  const parent = binding.node.parentNode;
+  if (!parent) return;
 
-  if (binding.node.parentNode) {
-    binding.node.parentNode.replaceChild(textNode, binding.node);
+  let node: Node;
+  if (value instanceof Node) {
+    node = value;
+  } else if (typeof value === 'string' || typeof value === 'number') {
+    node = document.createTextNode(String(value));
+  } else if (value instanceof DocumentFragment) {
+    const wrapper = document.createElement('span');
+    wrapper.appendChild(value);
+    node = wrapper;
+  } else {
+    node = document.createTextNode('');
   }
 
-  binding.value = value;
-};
+  parent.replaceChild(node, binding.node);
+  binding.node = node;
+}
 
-const applyBindings = (bindings: Binding[], values: any[]) => {
-  bindings.forEach(binding => {
-    const value = values[binding.index];
+/**
+ * Applies a binding according to its type
+ *
+ * @param {Binding} binding Binding configuration
+ * @param {*} value Value to apply
+ */
+function applyBinding(binding: Binding, value: any) {
+  switch (binding.type) {
+    case 'attribute':
+      applyAttributeBinding(binding, value);
+      break;
+    case 'event':
+      applyEventBinding(binding, value);
+      break;
+    case 'property':
+      applyPropertyBinding(binding, value);
+      break;
+    case 'text':
+      applyTextBinding(binding, value);
+      break;
+  }
+}
 
-    switch (binding.type) {
-      case 'attribute':
-        return _applyAttributeBinding(binding, value);
-      case 'event':
-        return _applyEventBinding(binding, value);
-      case 'property':
-        return _applyPropertyBinding(binding, value);
-      case 'text':
-        return _applyTextBinding(binding, value);
-    }
-  });
-};
+const templateCache = new WeakMap<TemplateStringsArray, DocumentFragment>();
 
-const templateCache = new Map<TemplateStringsArray, Node>();
-
+/**
+ * Template literal function to create reactive DOM elements
+ *
+ * @param {TemplateStringsArray} template Template string array
+ * @param {Array} values Values interpolated in the template
+ * @returns {Node} DOM node
+ *
+ * @example
+ * ```ts
+ * const [greeting, setGreeting] = createSignal('World');
+ * const element = html`<div>Hello ${greeting}!</div>`;
+ * ```
+ */
 export function html(template: TemplateStringsArray, ...values: any[]): Node {
-  let prevTemplate = templateCache.get(template);
-
-  if (!prevTemplate) {
+  if (!templateCache.has(template)) {
     const htmlString = template.reduce((acc, str, idx) => {
-      const binding = idx < values.length ? `<!--binding-${idx}-->` : '';
-      return acc + str + binding;
+      return acc + str + (idx < values.length ? `<!--binding-${idx}-->` : '');
     }, '');
 
     const tpl = document.createElement('template');
     tpl.innerHTML = htmlString;
-
-    prevTemplate = tpl.content.cloneNode(true);
-    templateCache.set(template, prevTemplate);
+    templateCache.set(template, tpl.content);
   }
 
-  const rootNode = prevTemplate.cloneNode(true);
-  const bindings = createBindings(rootNode);
-
-  applyBindings(bindings, values);
-  return rootNode;
+  const node = templateCache.get(template)?.cloneNode(true) as DocumentFragment;
+  const bindings = createBindings(node);
+  applyAllBindings(bindings, values);
+  return node;
 }
